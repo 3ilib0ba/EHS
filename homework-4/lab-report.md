@@ -106,3 +106,80 @@ user@operation-highload-systems:~$ dig @127.0.0.1 my-awesome-highload-app.local 
 Часть запросов пойдёт на сломанный сервер.
 
 ---
+
+## Задание 3. Балансировка Layer 4 с  с помощью IPVS
+
+* Создайте dummy1 интерфейс с адресом 192.168.100.1/32
+* Используя ipvsadm создайте VS для TCP порта 80 ведущего в 127.0.0.1:8081 и 127.0.0.1:8082 использующего round-robin тип балансировки.
+  * Используя curl сходите в http://192.168.100.1 продемонстрируйте счетчики на ipvs, убедитесь, что балансировка происходит.
+
+---
+
+Создаю dummy1 интерфейс:
+
+```
+user@operation-highload-systems:~$ sudo ip link add dummy1 type dummy
+
+user@operation-highload-systems:~$ sudo ip addr add 192.168.100.1/32 dev dummy1
+
+user@operation-highload-systems:~$ sudo ip link set dummy1 up
+
+user@operation-highload-systems:~$ ip addr show dev dummy1
+3: dummy1: <BROADCAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc noqueue state UNKNOWN group default qlen 1000
+link/ether 62:5c:99:39:16:14 brd ff:ff:ff:ff:ff:ff
+inet 192.168.100.1/32 scope global dummy1
+valid_lft forever preferred_lft forever
+inet6 fe80::605c:99ff:fe39:1614/64 scope link
+valid_lft forever preferred_lft forever
+```
+
+---
+
+Создан VS для TCP-порта 80 и назначен round-robin:
+
+```
+user@operation-highload-systems:~$ sudo modprobe ip_vs ip_vs_rr nf_conntrack
+
+user@operation-highload-systems:~$ sudo ipvsadm --clear
+
+user@operation-highload-systems:~$ sudo ipvsadm -a -t 192.168.100.1:80 -r 127.0.0.1:8081 -m
+
+user@operation-highload-systems:~$ sudo ipvsadm -a -t 192.168.100.1:80 -r 127.0.0.1:8082 -m
+
+user@operation-highload-systems:~$ sudo ipvsadm -Ln
+IP Virtual Server version 1.2.1 (size=4096)
+Prot LocalAddress:Port Scheduler Flags
+  -> RemoteAddress:Port           Forward Weight ActiveConn InActConn
+TCP  192.168.100.1:80 rr
+  -> 127.0.0.1:8081               Masq    1      0          0         
+  -> 127.0.0.1:8082               Masq    1      0          0
+```
+
+---
+
+Проверка балансировки:
+
+```
+user@operation-highload-systems:~$ for i in {1..10}; do curl -s http://192.168.100.1/ | grep -E "Response"; done
+"<h2>***Response from Backend Server 2***</h2>"
+"<h1>Response from Backedn Server 1</h1>"
+"<h2>***Response from Backend Server 2***</h2>"
+"<h1>Response from Backedn Server 1</h1>"
+"<h2>***Response from Backend Server 2***</h2>"
+"<h1>Response from Backedn Server 1</h1>"
+"<h2>***Response from Backend Server 2***</h2>"
+"<h1>Response from Backedn Server 1</h1>"
+"<h2>***Response from Backend Server 2***</h2>"
+"<h1>Response from Backedn Server 1</h1>"
+user@operation-highload-systems:~$ sudo ipvsadm -Ln --stats
+IP Virtual Server version 1.2.1 (size=4096)
+Prot LocalAddress:Port               Conns   InPkts  OutPkts  InBytes OutBytes
+  -> RemoteAddress:Port
+TCP  192.168.100.1:80                   10       63       59     4126     5468
+  -> 127.0.0.1:8081                      5       31       30     2037     2740
+  -> 127.0.0.1:8082                      5       32       29     2089     2728
+```
+
+Видно, что запросы распределяются равномерно, а значит все корректно
+
+---
